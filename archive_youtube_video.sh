@@ -49,7 +49,6 @@ $YT_DLP \
     --write-sub \
     --sub-langs "all" \
     --write-info-json \
-    --write-annotations \
     --compat-options filename-sanitization \
     --output "$TEMP_DIR/%(uploader)s/%(id)s/%(title)s [%(id)s].%(ext)s" \
     "$URL" || error_exit "yt-dlp failed to download the video."
@@ -65,7 +64,6 @@ for video_dir in "$TEMP_DIR"/*/*/; do
         VIDEO_FILE="$video_dir/$BASENAME.mkv"
         THUMBNAIL_WEBP="$video_dir/$BASENAME.webp"
         INFO_JSON="$video_dir/$BASENAME.info.json"
-        ANNOTATIONS_FILE="$video_dir/$BASENAME.annotations"
         CHAPTERS_FILE="$video_dir/${BASENAME}_chapters.txt"
         THUMBNAIL_PNG="$video_dir/$BASENAME.png"
         UPLOADER=$(basename "$(dirname "$video_dir")")
@@ -95,12 +93,6 @@ for video_dir in "$TEMP_DIR"/*/*/; do
         author=$(jq -r .uploader "$INFO_JSON") || error_exit "jq failed to extract the video author."
         description=$(jq -r .description "$INFO_JSON") || error_exit "jq failed to extract the video description."
         comment=$(jq -r .webpage_url "$INFO_JSON") || error_exit "jq failed to extract the video url."
-
-        # Append annotations to description if they were downloaded
-        if [ -f "$ANNOTATIONS_FILE" ]; then
-            annotations=$(<"$ANNOTATIONS_FILE")
-            description="$description\n\nAnnotations:\n$annotations"
-        fi
 
         # Step 3: Convert all .vtt subtitle files to .srt and prepare ffmpeg subtitle inputs
         subtitle_inputs=()
