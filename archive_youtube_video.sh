@@ -54,7 +54,7 @@ $YT_DLP \
     "$URL" || error_exit "yt-dlp failed to download the video."
 
 # Process each video in the temp directory
-for video_dir in "$TEMP_DIR"/*/*/; do
+for video_dir in "$TEMP_DIR"/*/*; do
     if [ ! -d "$video_dir" ]; then
         error_exit "No videos found to process in $TEMP_DIR."
     fi
@@ -67,7 +67,7 @@ for video_dir in "$TEMP_DIR"/*/*/; do
         CHAPTERS_FILE="$video_dir/${BASENAME}_chapters.txt"
         THUMBNAIL_PNG="$video_dir/$BASENAME.png"
         UPLOADER=$(basename "$(dirname "$video_dir")")
-        FINAL_OUTPUT="${FINAL_DIR}/${UPLOADER}/$BASENAME.mkv"
+        FINAL_OUTPUT_DIR="${FINAL_DIR}/${UPLOADER}/$BASENAME.mkv"
 
         mkdir -p "$FINAL_DIR/$UPLOADER" || error_exit "mkdir failed to create the final directory!"
 
@@ -132,7 +132,7 @@ for video_dir in "$TEMP_DIR"/*/*/; do
                 -metadata description="$description" \
                 -metadata comment="$comment" \
                 -map_metadata "$subtitle_index" \
-                "$FINAL_OUTPUT"  || error_exit "ffmpeg failed to create the final video."
+                "$FINAL_OUTPUT_DIR"  || error_exit "ffmpeg failed to create the final video."
         else
             ffmpeg -i "$VIDEO_FILE" \
                 -i "$THUMBNAIL_PNG" \
@@ -145,9 +145,9 @@ for video_dir in "$TEMP_DIR"/*/*/; do
                 -metadata author="$author" \
                 -metadata description="$description" \
                 -metadata comment="$comment" \
-                "$FINAL_OUTPUT"  || error_exit "ffmpeg failed to create the final video."
+                "$FINAL_OUTPUT_DIR"  || error_exit "ffmpeg failed to create the final video."
         fi
-        echo "Archived video created at $FINAL_OUTPUT"
+        echo "Archived video created at $FINAL_OUTPUT_DIR"
     done
 done
 
