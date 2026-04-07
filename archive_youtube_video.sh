@@ -6,7 +6,20 @@ error_exit() {
 }
 
 usage() {
-    echo "Usage: $(basename "$0") <youtube_video_url> [output_directory]" >&2
+    cat >&2 << EOF
+Usage: $(basename "$0") [OPTIONS] <url> [output_directory]
+
+Options:
+  -a          Audio only (best audio stream, no video)
+  -r RATE     Limit download rate (e.g. 10M, 500K)
+
+Environment variables:
+  TMPDIR    Temporary directory for downloads (default: /tmp)
+            Set this if your home drive lacks sufficient space.
+
+Example:
+  $(basename "$0") -a -r 5M https://youtube.com/...
+EOF
     exit 1
 }
 
@@ -34,20 +47,44 @@ EOF
     exit 1
 fi
 
-# Check for URL input
-if [ -z "$1" ]; then
-    usage
-fi
+AUDIO_ONLY=false
+RATE_LIMIT=""
+
+while getopts "ar:" opt; do
+    case $opt in
+        a) AUDIO_ONLY=true ;;
+        r) RATE_LIMIT="$OPTARG" ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 # Variables
 URL="$1"
 
 FINAL_DIR="${2:-$HOME/Videos/Youtube Videos}"
 
-# Step 1: Download the video, thumbnail, subtitles, and metadata
+if [ -z "$URL" ]; then
+    usage
+fi
+
+rate_args=()
+[ -n "$RATE_LIMIT" ] && rate_args+=("--limit-rate" "$RATE_LIMIT")
+
+if [ "$AUDIO_ONLY" = true ]; then
+    format_args=(
+        --format "bestaudio/best"
+        --remux-video "m4a>m4a/ogg>ogg/bestaudio"
+    )
+else
+    format_args=(
+        --format "bestvideo+bestaudio/best"
+        --merge-output-format mkv
+    )
+fi
+
 "$YT_DLP" \
-    --format "bestvideo+bestaudio/best" \
-    --merge-output-format mkv \
+    "${format_args[@]}" \
     --write-thumbnail \
     --embed-thumbnail \
     --convert-thumbnails png \
@@ -58,6 +95,12 @@ FINAL_DIR="${2:-$HOME/Videos/Youtube Videos}"
     --write-info-json \
     --embed-metadata \
     --embed-chapters \
+    --no-abort-on-error \
+    --retries infinite \
+    --fragment-retries infinite \
+    --retry-sleep exp=1:60:2 \
+    --throttled-rate 100K \
+    "${rate_args[@]}" \
     --compat-options filename-sanitization \
     --output "$FINAL_DIR/%(uploader)s/%(id)s/%(title)s [%(id)s].%(ext)s" \
     "$URL" || error_exit "yt-dlp failed to download the video."
