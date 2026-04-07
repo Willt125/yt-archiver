@@ -11,6 +11,7 @@ Usage: $(basename "$0") [OPTIONS] <url> [output_directory]
 
 Options:
   -a          Audio only (best audio stream, no video)
+  -n          Number of retries (default: 10, or "infinite")
   -r RATE     Limit download rate (e.g. 10M, 500K)
 EOF
     exit 1
@@ -42,10 +43,12 @@ fi
 
 AUDIO_ONLY=false
 RATE_LIMIT=""
+RETRIES=10
 
-while getopts "ar:" opt; do
+while getopts "an:r:" opt; do
     case $opt in
         a) AUDIO_ONLY=true ;;
+        n) RETRIES="$OPTARG" ;;
         r) RATE_LIMIT="$OPTARG" ;;
         *) usage ;;
     esac
@@ -89,8 +92,8 @@ fi
     --embed-metadata \
     --embed-chapters \
     --no-abort-on-error \
-    --retries infinite \
-    --fragment-retries infinite \
+    --retries "$RETRIES" \
+    --fragment-retries "$RETRIES" \
     --retry-sleep exp=1:60:2 \
     --throttled-rate 100K \
     "${rate_args[@]}" \
