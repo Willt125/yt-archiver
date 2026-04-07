@@ -12,13 +12,6 @@ Usage: $(basename "$0") [OPTIONS] <url> [output_directory]
 Options:
   -a          Audio only (best audio stream, no video)
   -r RATE     Limit download rate (e.g. 10M, 500K)
-
-Environment variables:
-  TMPDIR    Temporary directory for downloads (default: /tmp)
-            Set this if your home drive lacks sufficient space.
-
-Example:
-  $(basename "$0") -a -r 5M https://youtube.com/...
 EOF
     exit 1
 }
