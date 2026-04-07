@@ -1,3 +1,7 @@
+##
+## DEPRECATED: DO NOT INTEND TO MAINTAIN. DO WHAT YOU MUST.
+##
+
 # Error handling function
 function ErrorExit($message) {
     Write-Error $message
