@@ -26,6 +26,8 @@ uploads or preserving videos worth keeping.
   **JavaScript runtime** (deno >= 2.3 recommended). **mutagen** is needed to
   embed thumbnails in audio files. The official yt-dlp binaries include
   yt-dlp-ejs and mutagen; with pip, install `yt-dlp[default]`.
+- Optional: **mkvmerge** from [MKVToolNix](https://mkvtoolnix.download/), to
+  embed auto-generated subtitles (`-s`) in the video file.
 
 The script reports anything missing before it starts.
 

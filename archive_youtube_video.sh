@@ -105,6 +105,7 @@ Requirements:
   support yt-dlp also needs yt-dlp-ejs and a JavaScript runtime (deno >= 2.3,
   node >= 22, quickjs >= 2023-12-9, any quickjs-ng, or bun 1.2.11-1.3.14,
   which is deprecated). mutagen is needed to embed thumbnails in audio files.
+  mkvmerge (MKVToolNix) is needed to embed auto-generated subtitles (-s).
   The official yt-dlp binaries and "pip install 'yt-dlp[default]'" include
   yt-dlp-ejs and mutagen.
 
@@ -140,6 +141,7 @@ AUTO SUBTITLES
   <name>.auto.<lang>.vtt so they are never mistaken for human-made tracks.
   In MKV files they are also embedded as extra tracks titled
   "Auto-generated (<lang>)", which players show in their subtitle menus.
+  Embedding needs mkvmerge from MKVToolNix.
 
   LANGS is "orig" for the transcript in the video's own language (recommended),
   or a comma-separated list of language codes or regular expressions passed to
@@ -306,61 +308,75 @@ vtt_to_srt() {
 # Embed the <name>.auto.<lang>.vtt files next to an MKV as extra subtitle
 # tracks titled "Auto-generated (<lang>)", replacing any embedded by an
 # earlier run. Human-made tracks, attachments and chapters are kept.
-# yt-dlp's own embedding can't be used: it drops existing subtitle tracks.
-# The tracks are embedded as SRT converted by vtt_to_srt; the .vtt files
-# stay as downloaded.
+#
+# This uses mkvmerge rather than ffmpeg: yt-dlp's own embedding drops the
+# existing subtitle tracks, and adding tracks with some ffmpeg builds produced
+# subtitles that stopped after the first line. The tracks are embedded as SRT
+# converted by vtt_to_srt, which every player supports (mkvmerge's WebVTT
+# format isn't recognised by older ffmpeg-based players); the .vtt files stay
+# as downloaded.
 embed_auto_subs() {
-    local video="$1" name tmp line sub lang srt status
-    local index=0 kept=0 input=1
-    local inputs=() maps=(-map 0) tags=() srt_files=()
+    local video="$1" name tmp line sub lang srt status=0
+    local drop="" drop_args=() sub_args=() srt_files=()
 
     name="${video%.mkv}"
     tmp="$name.embedding.mkv"
 
-    # Existing subtitle tracks, one "index,title" line each. Tracks added by
-    # an earlier run are dropped so they can be replaced.
+    # Existing subtitle tracks, one "index,title" line each. For Matroska,
+    # ffprobe's stream index equals mkvmerge's track ID. Tracks added by an
+    # earlier run are dropped so they can be replaced.
     while IFS= read -r line; do
-        [ -n "$line" ] || continue
         case "${line#*,}" in
-            "Auto-generated ("*) maps+=(-map "-0:s:$index") ;;
-            *) kept=$((kept + 1)) ;;
+            "Auto-generated ("*) drop="$drop${drop:+,}${line%%,*}" ;;
         esac
-        index=$((index + 1))
     done << EOF
 $(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=title -of csv=p=0 "$video")
 EOF
 
-    # New tracks follow the kept ones, so they are numbered from $kept.
     for sub in "$name".auto.*.vtt; do
         [ -e "$sub" ] || continue
         lang="${sub#"$name.auto."}"
         lang="${lang%.vtt}"
         srt="$name.embedding.$lang.srt"
         srt_files+=("$srt")
-        vtt_to_srt "$sub" > "$srt" || { rm -f "${srt_files[@]}"; return 1; }
-        inputs+=(-i "$srt")
-        maps+=(-map "$input")
-        tags+=("-metadata:s:s:$kept" "language=${lang%-orig}"
-               "-metadata:s:s:$kept" "title=Auto-generated ($lang)"
-               "-disposition:s:$kept" 0)
-        input=$((input + 1))
-        kept=$((kept + 1))
+        vtt_to_srt "$sub" > "$srt" || status=1
+        sub_args+=(--language "0:${lang%-orig}"
+                   --track-name "0:Auto-generated ($lang)"
+                   --default-track-flag 0:no
+                   "$srt")
     done
-    [ ${#inputs[@]} -gt 0 ] || return 0
 
-    # Write a new file next to the original, then replace it, keeping its
-    # modification time.
-    if ffmpeg -nostdin -v error -y -i "$video" "${inputs[@]}" "${maps[@]}" \
-            -c copy "${tags[@]}" "$tmp"; then
-        touch -r "$video" "$tmp"
-        mv -f "$tmp" "$video"
-        status=0
-    else
-        rm -f "$tmp"
-        status=1
+    if [ "$status" -eq 0 ] && [ ${#sub_args[@]} -gt 0 ]; then
+        # Write a new file next to the original, then replace it, keeping its
+        # modification time. mkvmerge exits with 1 for warnings, 2 for errors.
+        if [ -n "$drop" ]; then
+            drop_args=(--subtitle-tracks "!$drop")
+        fi
+        run_mkvmerge -q -o "$tmp" "${drop_args[@]}" "$video" "${sub_args[@]}"
+        if [ $? -le 1 ]; then
+            touch -r "$video" "$tmp"
+            mv -f "$tmp" "$video"
+        else
+            rm -f "$tmp"
+            status=1
+        fi
     fi
-    rm -f "${srt_files[@]}"
+    if [ ${#srt_files[@]} -gt 0 ]; then
+        rm -f "${srt_files[@]}"
+    fi
     return "$status"
+}
+
+# mkvmerge decodes file names using the locale, so under the POSIX locale
+# (common for cron jobs and minimal shells) it can't open names with
+# non-ASCII characters, which yt-dlp's filename sanitising often produces.
+# MKVMERGE_LOCALE is set to a UTF-8 locale in that case.
+run_mkvmerge() {
+    if [ -n "$MKVMERGE_LOCALE" ]; then
+        LC_ALL="$MKVMERGE_LOCALE" mkvmerge "$@"
+    else
+        mkvmerge "$@"
+    fi
 }
 
 # Embed auto-generated subtitles into the MKVs of the given video IDs.
@@ -472,6 +488,26 @@ if [ -n "$COOKIES_FILE" ]; then
 fi
 log "Note: all yt-dlp configuration files are ignored (user, system and portable)."
 
+# Embedding auto-generated subtitles (-s) needs mkvmerge; without it they are
+# still saved as .vtt files.
+EMBED_AUTO_SUBS=false
+MKVMERGE_LOCALE=""
+if [ -n "$AUTO_SUBS" ]; then
+    if command -v mkvmerge > /dev/null 2>&1; then
+        EMBED_AUTO_SUBS=true
+        if [ "$(locale charmap 2>/dev/null)" != UTF-8 ]; then
+            MKVMERGE_LOCALE="$(locale -a 2>/dev/null | grep -i -m 1 -E '^(C|en_US)\.utf-?8$')"
+            if [ -z "$MKVMERGE_LOCALE" ]; then
+                warn "no UTF-8 locale found; embedding may fail for file names
+with non-ASCII characters."
+            fi
+        fi
+    else
+        warn "mkvmerge not found; auto-generated subtitles will be saved as .vtt
+files but not embedded. Install MKVToolNix to embed them."
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Build the yt-dlp commands
 # ---------------------------------------------------------------------------
@@ -581,7 +617,7 @@ if [ -n "$AUTO_SUBS" ]; then
     run_yt_dlp "${common_args[@]}" "${auto_subs_args[@]}"
     auto_subs_status=$?
 
-    if [ -f "$auto_archive" ]; then
+    if [ "$EMBED_AUTO_SUBS" = true ] && [ -f "$auto_archive" ]; then
         # Archive lines are "<extractor> <id>".
         # shellcheck disable=SC2046 # IDs contain no spaces or glob characters
         embed_auto_subs_for_ids $(tail -n +$((archived_before + 1)) "$auto_archive" | awk '{print $2}') \

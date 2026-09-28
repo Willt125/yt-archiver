@@ -143,32 +143,42 @@ So `-s` adds a **second, subtitles-only pass** over the same URLs:
 
 **Embedding.** After the pass, the script embeds the auto sidecars into the MKV
 of each video the pass processed (the IDs it appended to
-`archive-autosubs.txt`), using ffmpeg directly:
+`archive-autosubs.txt`), using **mkvmerge** (MKVToolNix):
 
-- `-map 0` keeps every existing stream, attachment and chapter; tracks titled
-  `Auto-generated (...)` from an earlier run are dropped (`-map -0:s:N`) and
-  every `<name>.auto.<lang>.vtt` next to the video is added, so re-embedding
-  replaces rather than duplicates.
-- Each new track gets `title=Auto-generated (<lang>)` (the yt-dlp code, e.g.
-  `en-orig`), `language=<lang without -orig>` and is never the default track.
+- Why mkvmerge: yt-dlp's embedding drops the existing subtitle tracks, and
+  adding tracks with ffmpeg failed with a recent ffmpeg development build
+  (N-126136): even a plain `ffmpeg -i video.mkv -i sub.vtt -map 0 -map 1
+  -c copy` produced a track that mpv 0.37 showed only the first caption of,
+  and at first VLC 3.0.20 showed a black picture. ffmpeg 6.1 and 7.0 were
+  fine, so the problem is specific to that ffmpeg version.
+- mkvmerge is optional: without it, `-s` still saves the `.vtt` files and
+  warns once that they are not embedded.
+- mkvmerge copies every existing track, attachment, chapter and global tag.
+  Tracks titled `Auto-generated (...)` from an earlier run are dropped
+  (`--subtitle-tracks !IDs`; for Matroska, ffprobe's stream index equals
+  mkvmerge's track ID) and every `<name>.auto.<lang>.vtt` next to the video
+  is added, so re-embedding replaces rather than duplicates.
+- Each new track gets the name `Auto-generated (<lang>)` (the yt-dlp code,
+  e.g. `en-orig`), the language `<lang without -orig>` (mkvmerge writes the
+  proper ISO 639-2 and BCP 47 codes) and is never the default track.
 - The tracks are embedded as **SRT**, converted by the script (`vtt_to_srt`,
-  POSIX awk), not as the raw VTT. YouTube's auto captions are "rolling"
-  captions with inline word timings (`<00:00:00.320><c> word</c>`), cue
-  settings (`align:start position:0%`) and 10 ms transition cues. Embedded
-  as-is with a recent development build of ffmpeg, they gave a black picture
-  in VLC 3.0.20 (even with subtitles off) and only the first caption in
-  mpv 0.37; ffmpeg 6.1 muxed them fine, so this depends on the ffmpeg
-  version. The conversion drops tags, settings, whitespace-only lines and
-  cues of 20 ms or less, keeping plain two-line captions. ffmpeg's own
-  VTT-to-SRT conversion is not used because it lost the first caption. The
-  `.vtt` sidecars stay exactly as downloaded.
+  POSIX awk), not as the raw VTT: mkvmerge stores WebVTT as `S_TEXT/WEBVTT`,
+  which ffmpeg 6.1 (and players built on it) doesn't recognise, while SRT
+  works everywhere. The conversion drops the inline word timings
+  (`<00:00:00.320><c> word</c>`), cue settings (`align:start position:0%`),
+  whitespace-only lines and the 10 ms transition cues of YouTube's rolling
+  captions, keeping plain two-line captions. ffmpeg's own VTT-to-SRT
+  conversion lost the first caption, so it isn't used. The `.vtt` sidecars
+  stay exactly as downloaded.
+- mkvmerge decodes file names using the locale and can't open non-ASCII names
+  under the POSIX locale (cron jobs, minimal shells); `--command-line-charset`
+  doesn't help. When the locale isn't UTF-8, mkvmerge runs with `LC_ALL` set
+  to an available `C.UTF-8` or `en_US.UTF-8` locale.
 - Written to `<name>.embedding.mkv`, then moved over the original with its
-  modification time preserved. On failure the original is untouched, the
-  sidecars are kept, and the run exits non-zero.
+  modification time preserved. mkvmerge exit code 1 (warnings) counts as
+  success. On failure the original is untouched, the sidecars are kept, and
+  the run exits non-zero.
 - Audio-only files are skipped (their containers can't hold subtitles).
-- The language tag is written as the 2-letter code (e.g. `de`); the Matroska
-  spec expects ISO 639-2 (`deu`). mpv displays and matches it fine; converting
-  would need a lookup table, which isn't worth it for now.
 
 `LANGS`: `orig` is a shortcut for `.*-orig`, the transcript in the video's own
 language (recommended). Anything else is passed to yt-dlp as-is, e.g.
