@@ -12,7 +12,10 @@ RELEASES_URL="https://github.com/yt-dlp/yt-dlp/releases/latest"
 
 # Output layout, relative to the output directory. The playlist folder and
 # index prefix are empty for videos not downloaded as part of a playlist.
-OUTPUT_TEMPLATE="%(channel,uploader|Unknown)s/%(playlist|)s/%(playlist_index&{:04d} - |)s%(title).150B [%(id)s].%(ext)s"
+OUTPUT_NAME="%(channel,uploader|Unknown)s/%(playlist|)s/%(playlist_index&{:04d} - |)s%(title).150B [%(id)s]"
+OUTPUT_TEMPLATE="$OUTPUT_NAME.%(ext)s"
+# Auto-generated subtitles get ".auto" in their name: <name>.auto.<lang>.vtt
+AUTO_SUBS_TEMPLATE="$OUTPUT_NAME.auto.%(ext)s"
 
 # Defaults
 OUTPUT_DIR="$HOME/Videos/YouTube Archive"
@@ -26,6 +29,7 @@ COMMENTS=1000
 COOKIES_FILE=""
 JS_RUNTIME=""
 WINDOWS_FILENAMES=false
+AUTO_SUBS=""
 
 LOG_FILE=""
 
@@ -86,10 +90,12 @@ Options:
   -j RUNTIME  JavaScript runtime for yt-dlp: node, quickjs or bun
               (default: deno, the recommended and sandboxed runtime)
   -w          Windows-safe filenames, for NTFS or exFAT drives
+  -s LANGS    Also save YouTube's auto-generated subtitles (see AUTO SUBTITLES)
 
 Output layout:
   DIR/<channel>/<playlist>/<index> - <title> [<id>].<ext>
   DIR/archive.txt             IDs already downloaded; they are skipped next time
+  DIR/archive-autosubs.txt    The same, for auto-generated subtitles (-s)
   DIR/logs/<date-time>.log    Log of each run
 
   A video in several playlists is only saved under the first one downloaded.
@@ -128,9 +134,26 @@ COOKIES
 
   yt-dlp updates the file with refreshed cookies after each run.
 
+AUTO SUBTITLES
+  By default only human-made subtitles are saved. With -s, a second,
+  subtitles-only pass also saves auto-generated ones, as separate files named
+  <name>.auto.<lang>.vtt so they are never mistaken for human-made tracks.
+  They are not embedded in the video file.
+
+  LANGS is "orig" for the transcript in the video's own language (recommended),
+  or a comma-separated list of language codes or regular expressions passed to
+  yt-dlp, e.g. "en-orig,es". Codes ending in "-orig" are original-language
+  transcripts; plain codes like "es" are YouTube's machine translations.
+
+  The extra pass looks up every video a second time, and pacing adds about 5
+  seconds per subtitle file, so keep the list short. Videos already listed in
+  archive-autosubs.txt are skipped; to fetch new languages for them, delete
+  that file. -s also works on videos archived earlier without it.
+
 Examples:
   $SCRIPT_NAME "https://www.youtube.com/playlist?list=..."
   $SCRIPT_NAME -a -o /mnt/data/Archive URL1 URL2
+  $SCRIPT_NAME -s orig "https://www.youtube.com/playlist?list=..."
   $SCRIPT_NAME -r 1080 -l 5M -c ~/.secrets/cookies.txt "https://www.youtube.com/@channel/playlists"
 EOF
 }
@@ -243,7 +266,7 @@ check_cookies_file() {
 # ---------------------------------------------------------------------------
 
 # The leading ":" lets us report option errors ourselves.
-while getopts ":ho:t:ar:n:l:pC:c:j:w" opt; do
+while getopts ":ho:t:ar:n:l:pC:c:j:ws:" opt; do
     case $opt in
         h) show_help; exit 0 ;;
         o) OUTPUT_DIR="$OPTARG" ;;
@@ -257,6 +280,8 @@ while getopts ":ho:t:ar:n:l:pC:c:j:w" opt; do
         c) COOKIES_FILE="$OPTARG" ;;
         j) JS_RUNTIME="$OPTARG" ;;
         w) WINDOWS_FILENAMES=true ;;
+        s) AUTO_SUBS="$OPTARG"
+           [ -n "$AUTO_SUBS" ] || usage_error "-s expects \"orig\" or a list of languages" ;;
         :) usage_error "option -$OPTARG requires an argument" ;;
         *) usage_error "invalid option -$OPTARG" ;;
     esac
@@ -277,6 +302,10 @@ case "$COMMENTS" in
     all) ;;
     '' | *[!0-9]*) usage_error "-C expects a number, \"all\" or 0" ;;
 esac
+if [ "$AUTO_SUBS" = orig ]; then
+    AUTO_SUBS=".*-orig"
+fi
+
 case "$JS_RUNTIME" in
     '' | deno | node | quickjs | bun) ;;
     *) usage_error "-j expects one of: deno, node, quickjs, bun" ;;
@@ -309,12 +338,38 @@ fi
 log "Note: all yt-dlp configuration files are ignored (user, system and portable)."
 
 # ---------------------------------------------------------------------------
-# Build the yt-dlp command
+# Build the yt-dlp commands
 # ---------------------------------------------------------------------------
 
-args=(
+# Options shared by the main pass and the auto-subtitles pass.
+common_args=(
     --ignore-config
     --paths "home:$OUTPUT_DIR"
+    --retries "$RETRIES"
+    --fragment-retries "$RETRIES"
+    --retry-sleep "http:exp=1:60"
+    --retry-sleep "fragment:exp=1:60"
+    --progress-delta 2
+)
+if [ "$PACING" = true ]; then
+    common_args+=(--preset-alias sleep)
+fi
+if [ -n "$RATE_LIMIT" ]; then
+    common_args+=(--limit-rate "$RATE_LIMIT")
+fi
+if [ -n "$TEMP_DIR" ]; then
+    common_args+=(--paths "temp:$TEMP_DIR")
+fi
+if [ -n "$COOKIES_FILE" ]; then
+    common_args+=(--cookies "$COOKIES_FILE")
+fi
+if [ "$WINDOWS_FILENAMES" = true ]; then
+    common_args+=(--windows-filenames)
+fi
+common_args+=("${runtime_args[@]}")
+
+# Main pass: media, human-made subtitles, thumbnail, metadata and comments.
+main_args=(
     --output "$OUTPUT_TEMPLATE"
     --download-archive "$OUTPUT_DIR/archive.txt"
     --write-info-json
@@ -323,56 +378,69 @@ args=(
     --embed-thumbnail
     --write-subs
     --sub-langs "all,-live_chat"
-    --retries "$RETRIES"
-    --fragment-retries "$RETRIES"
-    --retry-sleep "http:exp=1:60"
-    --retry-sleep "fragment:exp=1:60"
-    --progress-delta 2
 )
 
 if [ "$AUDIO_ONLY" = true ]; then
     # Extracting with "best" keeps the original codec: Opus lands in .opus,
     # AAC in .m4a. Audio containers can't hold subtitles, so they stay separate.
-    args+=(--format "ba/b" --extract-audio --audio-format best)
+    main_args+=(--format "ba/b" --extract-audio --audio-format best)
 else
-    args+=(--format "bv*+ba/b" --merge-output-format mkv --embed-subs)
+    main_args+=(--format "bv*+ba/b" --merge-output-format mkv --embed-subs)
     if [ -n "$RESOLUTION" ]; then
-        args+=(--format-sort "res:$RESOLUTION")
+        main_args+=(--format-sort "res:$RESOLUTION")
     fi
 fi
 
 case "$COMMENTS" in
-    0) args+=(--no-write-comments) ;;
-    all) args+=(--write-comments --extractor-args "youtube:comment_sort=top") ;;
+    0) main_args+=(--no-write-comments) ;;
+    all) main_args+=(--write-comments --extractor-args "youtube:comment_sort=top") ;;
     # At most $COMMENTS comments, of which at most 100 are replies.
-    *) args+=(--write-comments --extractor-args "youtube:comment_sort=top;max_comments=$COMMENTS,all,100") ;;
+    *) main_args+=(--write-comments --extractor-args "youtube:comment_sort=top;max_comments=$COMMENTS,all,100") ;;
 esac
 
-if [ "$PACING" = true ]; then
-    args+=(--preset-alias sleep)
-fi
-if [ -n "$RATE_LIMIT" ]; then
-    args+=(--limit-rate "$RATE_LIMIT")
-fi
-if [ -n "$TEMP_DIR" ]; then
-    args+=(--paths "temp:$TEMP_DIR")
-fi
-if [ -n "$COOKIES_FILE" ]; then
-    args+=(--cookies "$COOKIES_FILE")
-fi
-if [ "$WINDOWS_FILENAMES" = true ]; then
-    args+=(--windows-filenames)
-fi
-args+=("${runtime_args[@]}")
+# Auto-subtitles pass (-s): subtitles only, auto-generated captions only.
+# Human and auto tracks share language codes, so this can't be done in the
+# main pass without either pulling in every machine translation or mixing
+# the two up. Notes, all verified against yt-dlp:
+#   - The ".auto" name must come from the main template. With a separate
+#     "subtitle:" template yt-dlp writes to the normal subtitle name first,
+#     overwriting a human track of the same language.
+#   - No embedding: that re-muxes the file and drops the human tracks.
+#   - --skip-download doesn't record IDs in the archive without
+#     --force-write-archive.
+auto_subs_args=(
+    --output "$AUTO_SUBS_TEMPLATE"
+    --download-archive "$OUTPUT_DIR/archive-autosubs.txt"
+    --force-write-archive
+    --skip-download
+    --write-auto-subs
+    --sub-langs "$AUTO_SUBS"
+)
 
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
-log "Archiving $# URL(s) to $OUTPUT_DIR"
+# Run yt-dlp with the given options on the URLs, logging its output.
 # "--" stops a video ID starting with "-" from being read as an option.
-"$YT_DLP" "${args[@]}" -- "$@" 2>&1 | tee -a "$LOG_FILE"
-status=${PIPESTATUS[0]}
+run_yt_dlp() {
+    "$YT_DLP" "$@" -- "${URLS[@]}" 2>&1 | tee -a "$LOG_FILE"
+    return "${PIPESTATUS[0]}"
+}
+URLS=("$@")
+
+log "Archiving ${#URLS[@]} URL(s) to $OUTPUT_DIR"
+run_yt_dlp "${common_args[@]}" "${main_args[@]}"
+status=$?
+
+if [ -n "$AUTO_SUBS" ]; then
+    log "Saving auto-generated subtitles ($AUTO_SUBS)"
+    run_yt_dlp "${common_args[@]}" "${auto_subs_args[@]}"
+    auto_subs_status=$?
+    if [ "$status" -eq 0 ]; then
+        status=$auto_subs_status
+    fi
+fi
 
 if [ "$status" -eq 0 ]; then
     log "Done. Everything was archived to $OUTPUT_DIR"

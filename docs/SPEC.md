@@ -45,6 +45,7 @@ playlist is the expected workflow, to preserve archive structure.
 | `-c FILE` | Cookies file (Netscape format) | none |
 | `-j RT` | JS runtime: `node`, `quickjs` or `bun` | Deno (yt-dlp default) |
 | `-w` | Windows/exFAT-safe filenames | off |
+| `-s LANGS` | Also save auto-generated subtitles (see below) | off |
 
 Bandwidth (`-l`) and pacing (`-p`) are deliberately separate: `-l` protects
 household bandwidth, pacing reduces request frequency, which is what YouTube's
@@ -116,11 +117,43 @@ because it sandboxes the code it runs. Others are opt-in via `-j`, which passes
   `--convert-thumbnails`, `--convert-subs`, `--write-auto-subs`, and the
   redundant `--no-abort-on-error` and `--embed-chapters`.
 
+## Auto-generated subtitles (`-s`)
+
+yt-dlp selects human subtitles and auto captions from one pool with one
+`--sub-langs` filter, and both use plain language codes (`de` is both a human
+track and YouTube's machine translation into German). A single pass therefore
+cannot express "all human tracks plus these auto languages", and an auto track
+saved as `.de.vtt` would be indistinguishable from a human one.
+
+So `-s` adds a **second, subtitles-only pass** over the same URLs:
+
+- `--skip-download --write-auto-subs --sub-langs LANGS` (no `--write-subs`,
+  so only auto captions are candidates).
+- **Main** output template with `.auto` before the extension, so files are
+  `<name>.auto.<lang>.vtt`. A separate `subtitle:` template must *not* be
+  used: yt-dlp writes to the normal subtitle name first and then moves the
+  file, overwriting a human track of the same language.
+- Sidecar only, not embedded: embedding re-muxes the file and drops the
+  existing (human) subtitle streams.
+- Own archive, `archive-autosubs.txt`, with `--force-write-archive` (a
+  `--skip-download` pass does not record IDs otherwise). This also lets `-s`
+  add transcripts to videos archived earlier.
+- Auto tracks are fetched even when a human track exists in that language.
+
+`LANGS`: `orig` is a shortcut for `.*-orig`, the transcript in the video's own
+language (recommended). Anything else is passed to yt-dlp as-is, e.g.
+`en-orig,es`; codes without `-orig` are machine translations.
+
+Costs: each video is extracted twice (more requests), pacing adds about 5 s per
+auto subtitle file, and changing `LANGS` later does not revisit videos already
+in `archive-autosubs.txt` (delete it to refetch).
+
 ## Output layout
 
 ```
 OUT/<channel>/<playlist>/<index> - <title> [<id>].<ext>
 OUT/archive.txt
+OUT/archive-autosubs.txt   (only with -s)
 OUT/logs/YYYYmmdd-HHMMSS.log
 ```
 
@@ -154,9 +187,9 @@ Target bash 3.2 (macOS). Avoid: `date -d`, `readlink -f`, `sed -i`, `mapfile`,
   several playlists is stored only under the first one reached. Each
   playlist's info JSON still lists all entries. *Possible later change:* store
   each video once per channel and generate `.m3u` playlists.
-- **Auto-generated subtitles** are not downloaded; videos with only auto
-  captions get no transcript. To be revisited in a later commit (the
-  original-language ASR track only, not machine translations).
+- **Auto-generated subtitles** (with `-s`) are separate `.auto.<lang>.vtt`
+  files only. *Planned:* embed them as their own, clearly labelled tracks
+  without disturbing the human tracks.
 - **Config escape hatch:** if needed later, `--config-locations FILE` still
   works under `--ignore-config`.
 

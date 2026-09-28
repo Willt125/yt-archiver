@@ -63,6 +63,7 @@ archive_youtube_video.sh [options] URL [URL...]
 | `-c FILE` | Cookies file (Netscape format) | none |
 | `-j RUNTIME` | JavaScript runtime: `node`, `quickjs` or `bun` | deno |
 | `-w` | Windows-safe filenames, for NTFS or exFAT drives | off |
+| `-s LANGS` | Also save auto-generated subtitles, e.g. `orig` | off |
 
 Quote URLs that contain `&`.
 
@@ -74,6 +75,9 @@ Quote URLs that contain `&`.
 
 # Every playlist on a channel, capped at 1080p, onto a data drive
 ./archive_youtube_video.sh -r 1080 -o /mnt/data/Archive "https://www.youtube.com/@channel/playlists"
+
+# Also save the auto-generated transcript in each video's own language
+./archive_youtube_video.sh -s orig "https://www.youtube.com/playlist?list=..."
 
 # Audio only, several videos at once
 ./archive_youtube_video.sh -a URL1 URL2 URL3
@@ -87,12 +91,28 @@ Quote URLs that contain `&`.
 ```
 DIR/<channel>/<playlist>/<index> - <title> [<id>].mkv    (plus .info.json, .webp, .<lang>.vtt)
 DIR/<channel>/<title> [<id>].mkv                         (videos not downloaded from a playlist)
+DIR/<channel>/.../<title> [<id>].auto.<lang>.vtt         (auto-generated subtitles, with -s)
 DIR/archive.txt                                          (IDs already downloaded)
+DIR/archive-autosubs.txt                                 (the same, for -s)
 DIR/logs/<date-time>.log                                 (one log per run)
 ```
 
 If yt-dlp reports errors, some items may not have been saved. Check the log,
 then re-run the same command: anything already archived is skipped.
+
+## Auto-generated subtitles
+
+Only human-made subtitles are saved by default. With `-s LANGS`, a second,
+subtitles-only pass also saves YouTube's auto-generated subtitles as separate
+`.auto.<lang>.vtt` files, so they can't be mistaken for human-made ones.
+
+- `-s orig` saves the transcript in each video's own language (recommended).
+- Other values are passed to yt-dlp as a language list, e.g. `-s "en-orig,es"`.
+  Codes without `-orig` are YouTube's machine translations.
+
+The extra pass looks every video up a second time, so it is slower and makes
+more requests. It also works on videos you archived earlier without `-s`. To
+fetch new languages for videos already done, delete `archive-autosubs.txt`.
 
 ## Cookies
 
@@ -117,8 +137,8 @@ metadata, subtitles, thumbnails and playlist structure.
 - A video that appears in several playlists is saved only under the first
   playlist downloaded, because the archive file tracks video IDs. Each
   playlist's info JSON still lists all its entries.
-- Auto-generated subtitles are not downloaded, so videos with only automatic
-  captions get no subtitle file.
+- Auto-generated subtitles (`-s`) are saved as separate files only; they are
+  not embedded in the video.
 - All yt-dlp configuration files are ignored, so every run behaves the same.
 - Pacing makes large downloads slow, especially for videos with many subtitle
   languages. Use `-p` to turn it off at your own risk.
