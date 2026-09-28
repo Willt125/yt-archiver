@@ -104,7 +104,9 @@ then re-run the same command: anything already archived is skipped.
 
 Only human-made subtitles are saved by default. With `-s LANGS`, a second,
 subtitles-only pass also saves YouTube's auto-generated subtitles as separate
-`.auto.<lang>.vtt` files, so they can't be mistaken for human-made ones.
+`.auto.<lang>.vtt` files, so they can't be mistaken for human-made ones. In
+MKV files they are also embedded as extra tracks titled
+`Auto-generated (<lang>)`, alongside the human-made tracks.
 
 - `-s orig` saves the transcript in each video's own language (recommended).
 - Other values are passed to yt-dlp as a language list, e.g. `-s "en-orig,es"`.
@@ -137,8 +139,8 @@ metadata, subtitles, thumbnails and playlist structure.
 - A video that appears in several playlists is saved only under the first
   playlist downloaded, because the archive file tracks video IDs. Each
   playlist's info JSON still lists all its entries.
-- Auto-generated subtitles (`-s`) are saved as separate files only; they are
-  not embedded in the video.
+- Auto-generated subtitles saved before embedding was added are not embedded
+  automatically. Delete `archive-autosubs.txt` and run with `-s` again.
 - All yt-dlp configuration files are ignored, so every run behaves the same.
 - Pacing makes large downloads slow, especially for videos with many subtitle
   languages. Use `-p` to turn it off at your own risk.

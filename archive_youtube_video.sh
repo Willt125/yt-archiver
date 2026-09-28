@@ -138,7 +138,8 @@ AUTO SUBTITLES
   By default only human-made subtitles are saved. With -s, a second,
   subtitles-only pass also saves auto-generated ones, as separate files named
   <name>.auto.<lang>.vtt so they are never mistaken for human-made tracks.
-  They are not embedded in the video file.
+  In MKV files they are also embedded as extra tracks titled
+  "Auto-generated (<lang>)", which players show in their subtitle menus.
 
   LANGS is "orig" for the transcript in the video's own language (recommended),
   or a comma-separated list of language codes or regular expressions passed to
@@ -251,6 +252,86 @@ Use an official yt-dlp binary or install with: pip install -U \"yt-dlp[default]\
 YouTube may only offer limited formats. Install deno >= 2.3, or choose
 another installed runtime with -j (see -h for supported versions)." ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# Auto-generated subtitles
+# ---------------------------------------------------------------------------
+
+# Embed the <name>.auto.<lang>.vtt files next to an MKV as extra subtitle
+# tracks titled "Auto-generated (<lang>)", replacing any embedded by an
+# earlier run. Human-made tracks, attachments and chapters are kept.
+# yt-dlp's own embedding can't be used: it drops existing subtitle tracks.
+embed_auto_subs() {
+    local video="$1" name tmp line sub lang
+    local index=0 kept=0 input=1
+    local inputs=() maps=(-map 0) tags=()
+
+    name="${video%.mkv}"
+    tmp="$name.embedding.mkv"
+
+    # Existing subtitle tracks, one "index,title" line each. Tracks added by
+    # an earlier run are dropped so they can be replaced.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "${line#*,}" in
+            "Auto-generated ("*) maps+=(-map "-0:s:$index") ;;
+            *) kept=$((kept + 1)) ;;
+        esac
+        index=$((index + 1))
+    done << EOF
+$(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=title -of csv=p=0 "$video")
+EOF
+
+    # New tracks follow the kept ones, so they are numbered from $kept.
+    for sub in "$name".auto.*.vtt; do
+        [ -e "$sub" ] || continue
+        lang="${sub#"$name.auto."}"
+        lang="${lang%.vtt}"
+        inputs+=(-i "$sub")
+        maps+=(-map "$input")
+        tags+=("-metadata:s:s:$kept" "language=${lang%-orig}"
+               "-metadata:s:s:$kept" "title=Auto-generated ($lang)"
+               "-disposition:s:$kept" 0)
+        input=$((input + 1))
+        kept=$((kept + 1))
+    done
+    [ ${#inputs[@]} -gt 0 ] || return 0
+
+    # Write a new file next to the original, then replace it, keeping its
+    # modification time.
+    if ffmpeg -nostdin -v error -y -i "$video" "${inputs[@]}" "${maps[@]}"             -c copy "${tags[@]}" "$tmp"; then
+        touch -r "$video" "$tmp"
+        mv -f "$tmp" "$video"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+# Embed auto-generated subtitles into the MKVs of the given video IDs.
+# Returns non-zero if any video failed.
+embed_auto_subs_for_ids() {
+    local id video embedded=0 failed=0
+
+    for id in "$@"; do
+        while IFS= read -r video; do
+            [ -n "$video" ] || continue
+            if embed_auto_subs "$video"; then
+                embedded=$((embedded + 1))
+            else
+                warn "could not embed auto-generated subtitles into $video
+The .vtt files next to it are kept. To retry, remove the line for $id
+from archive-autosubs.txt and run again."
+                failed=$((failed + 1))
+            fi
+        done << EOF
+$(find "$OUTPUT_DIR" -name "*\[$id\].mkv")
+EOF
+    done
+
+    log "Embedded auto-generated subtitles into $embedded video(s)."
+    [ "$failed" -eq 0 ]
 }
 
 # Warn if the cookies file is readable by other users.
@@ -405,7 +486,8 @@ esac
 #   - The ".auto" name must come from the main template. With a separate
 #     "subtitle:" template yt-dlp writes to the normal subtitle name first,
 #     overwriting a human track of the same language.
-#   - No embedding: that re-muxes the file and drops the human tracks.
+#   - No embedding by yt-dlp: it re-muxes the file and drops the human
+#     tracks. embed_auto_subs adds them afterwards with ffmpeg instead.
 #   - --skip-download doesn't record IDs in the archive without
 #     --force-write-archive.
 auto_subs_args=(
@@ -434,9 +516,23 @@ run_yt_dlp "${common_args[@]}" "${main_args[@]}"
 status=$?
 
 if [ -n "$AUTO_SUBS" ]; then
+    # Videos processed by this pass are the IDs it appends to its archive.
+    auto_archive="$OUTPUT_DIR/archive-autosubs.txt"
+    archived_before=0
+    if [ -f "$auto_archive" ]; then
+        archived_before=$(wc -l < "$auto_archive")
+    fi
+
     log "Saving auto-generated subtitles ($AUTO_SUBS)"
     run_yt_dlp "${common_args[@]}" "${auto_subs_args[@]}"
     auto_subs_status=$?
+
+    if [ -f "$auto_archive" ]; then
+        # Archive lines are "<extractor> <id>".
+        # shellcheck disable=SC2046 # IDs contain no spaces or glob characters
+        embed_auto_subs_for_ids $(tail -n +$((archived_before + 1)) "$auto_archive" | awk '{print $2}') \
+            || auto_subs_status=1
+    fi
     if [ "$status" -eq 0 ]; then
         status=$auto_subs_status
     fi
@@ -445,7 +541,7 @@ fi
 if [ "$status" -eq 0 ]; then
     log "Done. Everything was archived to $OUTPUT_DIR"
 else
-    log "yt-dlp reported errors (exit code $status); some items may not have been archived."
+    log "Finished with errors (exit code $status); some items may not have been archived."
     log "See $LOG_FILE. Re-running the same command retries only what is missing."
 fi
 exit "$status"
