@@ -133,12 +133,31 @@ So `-s` adds a **second, subtitles-only pass** over the same URLs:
   `<name>.auto.<lang>.vtt`. A separate `subtitle:` template must *not* be
   used: yt-dlp writes to the normal subtitle name first and then moves the
   file, overwriting a human track of the same language.
-- Sidecar only, not embedded: embedding re-muxes the file and drops the
-  existing (human) subtitle streams.
+- Not embedded by yt-dlp: its embedding re-muxes the file and drops the
+  existing (human) subtitle streams. Instead the script embeds them itself
+  (see below).
 - Own archive, `archive-autosubs.txt`, with `--force-write-archive` (a
   `--skip-download` pass does not record IDs otherwise). This also lets `-s`
   add transcripts to videos archived earlier.
 - Auto tracks are fetched even when a human track exists in that language.
+
+**Embedding.** After the pass, the script embeds the auto sidecars into the MKV
+of each video the pass processed (the IDs it appended to
+`archive-autosubs.txt`), using ffmpeg directly:
+
+- `-map 0` keeps every existing stream, attachment and chapter; tracks titled
+  `Auto-generated (...)` from an earlier run are dropped (`-map -0:s:N`) and
+  every `<name>.auto.<lang>.vtt` next to the video is added, so re-embedding
+  replaces rather than duplicates.
+- Each new track gets `title=Auto-generated (<lang>)` (the yt-dlp code, e.g.
+  `en-orig`), `language=<lang without -orig>` and is never the default track.
+- Written to `<name>.embedding.mkv`, then moved over the original with its
+  modification time preserved. On failure the original is untouched, the
+  sidecars are kept, and the run exits non-zero.
+- Audio-only files are skipped (their containers can't hold subtitles).
+- The language tag is written as the 2-letter code (e.g. `de`); the Matroska
+  spec expects ISO 639-2 (`deu`). mpv displays and matches it fine; converting
+  would need a lookup table, which isn't worth it for now.
 
 `LANGS`: `orig` is a shortcut for `.*-orig`, the transcript in the video's own
 language (recommended). Anything else is passed to yt-dlp as-is, e.g.
@@ -187,9 +206,12 @@ Target bash 3.2 (macOS). Avoid: `date -d`, `readlink -f`, `sed -i`, `mapfile`,
   several playlists is stored only under the first one reached. Each
   playlist's info JSON still lists all entries. *Possible later change:* store
   each video once per channel and generate `.m3u` playlists.
-- **Auto-generated subtitles** (with `-s`) are separate `.auto.<lang>.vtt`
-  files only. *Planned:* embed them as their own, clearly labelled tracks
-  without disturbing the human tracks.
+- **Auto-generated subtitles** are only embedded for videos processed by the
+  current run. Sidecars saved by earlier versions (before embedding existed)
+  are embedded once `archive-autosubs.txt` is deleted and `-s` is run again.
+- Auto sidecars are written into the folder of the URL being processed. If
+  `-s` is run later through a different URL (e.g. another playlist), they land
+  in that folder, away from the video, and are not embedded.
 - **Config escape hatch:** if needed later, `--config-locations FILE` still
   works under `--ignore-config`.
 
