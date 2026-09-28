@@ -258,14 +258,61 @@ another installed runtime with -j (see -h for supported versions)." ;;
 # Auto-generated subtitles
 # ---------------------------------------------------------------------------
 
+# Convert a YouTube auto-generated WebVTT file to plain SRT for embedding.
+# YouTube's "rolling" auto captions use inline word timings, positioning
+# settings and 10 ms transition cues, which some player and ffmpeg versions
+# mishandle once embedded. This keeps each cue's text, drops the tags,
+# settings, whitespace-only lines and cues of 20 ms or less. Times are
+# parsed with integer arithmetic only, since some awks read decimals using
+# the locale's decimal separator.
+vtt_to_srt() {
+    # Carriage returns are removed first: awk's blank-line record separator
+    # doesn't treat "\r" lines as blank.
+    tr -d '\r' < "$1" | awk '
+        function ms(t,    parts, n, secs) {
+            n = split(t, parts, ":")
+            split(parts[n], secs, ".")
+            return (((n == 3 ? parts[1] : 0) * 60 + parts[n - 1]) * 60 + secs[1]) * 1000 + secs[2]
+        }
+        function srt_time(x) {
+            return sprintf("%02d:%02d:%02d,%03d", int(x / 3600000), int(x / 60000) % 60, int(x / 1000) % 60, x % 1000)
+        }
+        BEGIN { RS = ""; FS = "\n"; count = 0 }
+        {
+            timing = 0
+            for (i = 1; i <= NF; i++) {
+                if (!timing && index($i, "-->")) timing = i
+            }
+            if (!timing) next
+            split($timing, t, /[ \t]+/)
+            start = ms(t[1]); end = ms(t[3])
+            if (end - start <= 20) next
+
+            text = ""
+            for (i = timing + 1; i <= NF; i++) {
+                line = $i
+                gsub(/<[^>]*>/, "", line)
+                gsub(/&nbsp;/, " ", line); gsub(/&lt;/, "<", line)
+                gsub(/&gt;/, ">", line); gsub(/&amp;/, "\\&", line)
+                gsub(/^[ \t]+|[ \t]+$/, "", line)
+                if (line != "") text = text (text == "" ? "" : "\n") line
+            }
+            if (text == "") next
+            printf "%d\n%s --> %s\n%s\n\n", ++count, srt_time(start), srt_time(end), text
+        }
+    '
+}
+
 # Embed the <name>.auto.<lang>.vtt files next to an MKV as extra subtitle
 # tracks titled "Auto-generated (<lang>)", replacing any embedded by an
 # earlier run. Human-made tracks, attachments and chapters are kept.
 # yt-dlp's own embedding can't be used: it drops existing subtitle tracks.
+# The tracks are embedded as SRT converted by vtt_to_srt; the .vtt files
+# stay as downloaded.
 embed_auto_subs() {
-    local video="$1" name tmp line sub lang
+    local video="$1" name tmp line sub lang srt status
     local index=0 kept=0 input=1
-    local inputs=() maps=(-map 0) tags=()
+    local inputs=() maps=(-map 0) tags=() srt_files=()
 
     name="${video%.mkv}"
     tmp="$name.embedding.mkv"
@@ -288,7 +335,10 @@ EOF
         [ -e "$sub" ] || continue
         lang="${sub#"$name.auto."}"
         lang="${lang%.vtt}"
-        inputs+=(-i "$sub")
+        srt="$name.embedding.$lang.srt"
+        srt_files+=("$srt")
+        vtt_to_srt "$sub" > "$srt" || { rm -f "${srt_files[@]}"; return 1; }
+        inputs+=(-i "$srt")
         maps+=(-map "$input")
         tags+=("-metadata:s:s:$kept" "language=${lang%-orig}"
                "-metadata:s:s:$kept" "title=Auto-generated ($lang)"
@@ -300,13 +350,17 @@ EOF
 
     # Write a new file next to the original, then replace it, keeping its
     # modification time.
-    if ffmpeg -nostdin -v error -y -i "$video" "${inputs[@]}" "${maps[@]}"             -c copy "${tags[@]}" "$tmp"; then
+    if ffmpeg -nostdin -v error -y -i "$video" "${inputs[@]}" "${maps[@]}" \
+            -c copy "${tags[@]}" "$tmp"; then
         touch -r "$video" "$tmp"
         mv -f "$tmp" "$video"
+        status=0
     else
         rm -f "$tmp"
-        return 1
+        status=1
     fi
+    rm -f "${srt_files[@]}"
+    return "$status"
 }
 
 # Embed auto-generated subtitles into the MKVs of the given video IDs.

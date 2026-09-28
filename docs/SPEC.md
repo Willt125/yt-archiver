@@ -151,6 +151,17 @@ of each video the pass processed (the IDs it appended to
   replaces rather than duplicates.
 - Each new track gets `title=Auto-generated (<lang>)` (the yt-dlp code, e.g.
   `en-orig`), `language=<lang without -orig>` and is never the default track.
+- The tracks are embedded as **SRT**, converted by the script (`vtt_to_srt`,
+  POSIX awk), not as the raw VTT. YouTube's auto captions are "rolling"
+  captions with inline word timings (`<00:00:00.320><c> word</c>`), cue
+  settings (`align:start position:0%`) and 10 ms transition cues. Embedded
+  as-is with a recent development build of ffmpeg, they gave a black picture
+  in VLC 3.0.20 (even with subtitles off) and only the first caption in
+  mpv 0.37; ffmpeg 6.1 muxed them fine, so this depends on the ffmpeg
+  version. The conversion drops tags, settings, whitespace-only lines and
+  cues of 20 ms or less, keeping plain two-line captions. ffmpeg's own
+  VTT-to-SRT conversion is not used because it lost the first caption. The
+  `.vtt` sidecars stay exactly as downloaded.
 - Written to `<name>.embedding.mkv`, then moved over the original with its
   modification time preserved. On failure the original is untouched, the
   sidecars are kept, and the run exits non-zero.

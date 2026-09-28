@@ -106,7 +106,9 @@ Only human-made subtitles are saved by default. With `-s LANGS`, a second,
 subtitles-only pass also saves YouTube's auto-generated subtitles as separate
 `.auto.<lang>.vtt` files, so they can't be mistaken for human-made ones. In
 MKV files they are also embedded as extra tracks titled
-`Auto-generated (<lang>)`, alongside the human-made tracks.
+`Auto-generated (<lang>)`, alongside the human-made tracks. The embedded copy
+is simplified to plain captions for player compatibility; the `.vtt` files
+are kept exactly as downloaded.
 
 - `-s orig` saves the transcript in each video's own language (recommended).
 - Other values are passed to yt-dlp as a language list, e.g. `-s "en-orig,es"`.
