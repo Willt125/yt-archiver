@@ -145,7 +145,7 @@ Target bash 3.2 (macOS). Avoid: `date -d`, `readlink -f`, `sed -i`, `mapfile`,
 ## Repository
 
 - Delete `archive_youtube_video.ps1`.
-- Add a README once the implementation is in (point Windows users to WSL).
+- README.md (points Windows users to WSL).
 - Add a shellcheck GitHub Action.
 
 ## Known limitations and deferred work
