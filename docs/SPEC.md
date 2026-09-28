@@ -1,6 +1,6 @@
 # yt-archiver specification
 
-Status: agreed design for the rewrite of `archive_youtube_video.sh`. Not yet implemented.
+Status: implemented in `archive_youtube_video.sh`.
 
 ## Purpose
 
@@ -126,6 +126,8 @@ OUT/logs/YYYYmmdd-HHMMSS.log
 
 - Channel falls back to uploader, then `Unknown`.
 - The playlist folder and index prefix appear only for playlist downloads.
+  The index is zero-padded to 4 digits so files sort in playlist order.
+  The playlist's own info JSON is saved in its folder as `0000 - <playlist> [<id>].info.json`.
 - Titles are trimmed to about 150 bytes to stay under filesystem limits.
 
 ## Logging
@@ -158,9 +160,21 @@ Target bash 3.2 (macOS). Avoid: `date -d`, `readlink -f`, `sed -i`, `mapfile`,
 - **Config escape hatch:** if needed later, `--config-locations FILE` still
   works under `--ignore-config`.
 
-## To verify during implementation
+## Verified during implementation
 
-- The wording of yt-dlp's verbose header for yt-dlp-ejs, mutagen and JS runtime.
-- Whether `quickjs-ng` is selected via `-j quickjs`.
-- Whether the `playlist_index` prefix is zero-padded when used with `&`.
-- That thumbnails embed correctly in MKV, `.opus` and `.m4a` without conversion.
+Tested offline against yt-dlp 2026.08.19 with generated media:
+
+- yt-dlp's verbose header reports `exe versions:` (ffmpeg, ffprobe),
+  `Optional libraries:` (`yt_dlp_ejs`, `mutagen`) and `JS runtimes:`
+  (`none`, or a version marked `(unsupported)`); the script parses these lines.
+- `%(playlist_index&...)s` is not padded automatically, so the template pads
+  explicitly with `{:04d}`.
+- A `/` inside a `&` replacement is sanitized, so the playlist folder is
+  written as `%(playlist|)s/`; for single videos the empty segment collapses.
+- Thumbnails embed without conversion in MKV (as a WebP attachment), `.opus`
+  and `.m4a` (yt-dlp converts internally where required).
+- MKV output carries VTT subtitle tracks, chapters and the info JSON attachment;
+  `live_chat` is excluded; the archive file skips already-downloaded IDs.
+
+Still unverified: whether `quickjs-ng` is picked up via `-j quickjs`, and
+behaviour on bash 3.2 (reviewed by hand; no bash 3.2 was available to test).
