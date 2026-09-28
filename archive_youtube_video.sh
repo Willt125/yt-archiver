@@ -8,11 +8,13 @@ error_exit() {
 usage() {
     cat >&2 << EOF
 Usage: $(basename "$0") [OPTIONS] <url> [output_directory]
+Note: URLs containing "&" must be quoted: "<url>"
 
 Options:
-  -a          Audio only (best audio stream, no video)
-  -n          Number of retries (default: 10, or "infinite")
-  -r RATE     Limit download rate (e.g. 10M, 500K)
+  -a            Audio only (best audio stream, no video)
+  -n            Number of retries (default: 10, or "infinite")
+  -l RATE       Limit download rate (e.g. 10M, 500K)
+  -r RESOLUTION Highest video resolution to download (height, e.g. 480 for 480p)
 EOF
     exit 1
 }
@@ -44,12 +46,14 @@ fi
 AUDIO_ONLY=false
 RATE_LIMIT=""
 RETRIES=10
+RESOLUTION=""
 
-while getopts "an:r:" opt; do
+while getopts "an:l:r:" opt; do
     case $opt in
         a) AUDIO_ONLY=true ;;
         n) RETRIES="$OPTARG" ;;
-        r) RATE_LIMIT="$OPTARG" ;;
+        l) RATE_LIMIT="$OPTARG" ;;
+        r) RESOLUTION="$OPTARG" ;;
         *) usage ;;
     esac
 done
@@ -65,30 +69,32 @@ if [ -z "$URL" ]; then
 fi
 
 rate_args=()
+resolution_args=()
 [ -n "$RATE_LIMIT" ] && rate_args+=("--limit-rate" "$RATE_LIMIT")
+[ -n "$RESOLUTION" ] && resolution_args+=("[height<=?$RESOLUTION]")
 
 if [ "$AUDIO_ONLY" = true ]; then
     format_args=(
         --format "bestaudio/best"
-        --remux-video "m4a>m4a/ogg>ogg/bestaudio"
+        --remux-video "webm>opus/mp4>opus"
     )
 else
     format_args=(
-        --format "bestvideo+bestaudio/best"
+        --format "bestvideo${resolution_args}+bestaudio/best"
         --merge-output-format mkv
     )
 fi
 
 "$YT_DLP" \
     "${format_args[@]}" \
-    --write-thumbnail \
-    --embed-thumbnail \
+    --write-thumbnail   \
+    --embed-thumbnail   \ # I don't know what players or fs support embedded thumbs
     --convert-thumbnails png \
-    --write-subs --write-auto-subs \
+    -- write-subs --write-auto-subs \
     --sub-langs "all" \
-    --embed-subs \
-    --convert-subs srt \
-    --write-info-json \
+    --embed-subs      \
+    --convert-subs srt  \   # Maximum compatibility(?)
+    --write-info-json   \
     --embed-metadata \
     --embed-chapters \
     --no-abort-on-error \
@@ -98,7 +104,7 @@ fi
     --throttled-rate 100K \
     "${rate_args[@]}" \
     --compat-options filename-sanitization \
-    --output "$FINAL_DIR/%(uploader)s/%(id)s/%(title)s [%(id)s].%(ext)s" \
+    --output "$FINAL_DIR/%(channel)s/%(playlist)s/%(title)s [%(id)s].%(ext)s" \
     "$URL" || error_exit "yt-dlp failed to download the video."
 
 echo "All videos have been processed and saved in $FINAL_DIR."
